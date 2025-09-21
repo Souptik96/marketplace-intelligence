@@ -1,0 +1,27 @@
+name: Deploy to AWS (ECS Fargate)
+on: { workflow_dispatch: {} }
+permissions: { id-token: write, contents: read }
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
+          aws-region: ap-south-1
+      - name: Build & Push Image
+        run: |
+          ECR=$(terraform -chdir=terraform init -upgrade >/dev/null 2>&1; \
+               terraform -chdir=terraform apply -auto-approve -target=aws_ecr_repository.api >/dev/null 2>&1; \
+               terraform -chdir=terraform output -raw ecr_repo_url)
+          aws ecr get-login-password --region ap-south-1 | docker login --username AWS --password-stdin ${ECR%%/*}
+          docker build -f Dockerfile.api -t $ECR:$GITHUB_SHA .
+          docker push $ECR:$GITHUB_SHA
+          echo "IMAGE_URI=$ECR:$GITHUB_SHA" >> $GITHUB_ENV
+      - name: Terraform Apply
+        run: |
+          terraform -chdir=terraform apply -auto-approve -var="image_uri=$IMAGE_URI"
+      - name: Show URL
+        run: echo "ALB http://$(terraform -chdir=terraform output -raw alb_dns_name)"

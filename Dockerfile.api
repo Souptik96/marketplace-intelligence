@@ -1,0 +1,21 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy code and dataset builder
+COPY api /app/api
+COPY data /app/data
+
+# Build the DuckDB database inside the image
+RUN python /app/data/synthetic_generator.py
+
+# Runtime configuration
+ENV APP_ENV=local
+ENV DUCKDB_PATH=/app/data/out/market.duckdb
+
+EXPOSE 8000
+CMD ["uvicorn","api.main:app","--host","0.0.0.0","--port","8000"]
