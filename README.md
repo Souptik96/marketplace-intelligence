@@ -30,8 +30,9 @@ streamlit run app/streamlit_app.py
 
 ### The HF Space runs a simplified Gradio interface for quick testing. For the full FastAPI backend and AWS deployment, use this repository.
 ---
-
-
+AWS Diagram:
+<img width="10970" height="10175" alt="AWS Architecture" src="https://github.com/user-attachments/assets/ed191490-e37e-4143-9933-dfa595e2246b" />
+---
 ## One‑Click Deploy to AWS (ECS Fargate)
 
 **Prereqs**: AWS CLI configured with deploy permissions, Docker, Terraform ≥ 1.7.
