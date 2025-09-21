@@ -1,5 +1,3 @@
-Here's the updated README with the cost section added:
-
 # Marketplace Intelligence & GenAI Product Analyst — One‑Click AWS (ECS Fargate)
 
 **What it is**: Production‑style demo for NL→SQL over marketplace sales.
