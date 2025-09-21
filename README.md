@@ -24,6 +24,13 @@ streamlit run app/streamlit_app.py
 ```
 
 ---
+## Live Demo
+
+🚀 **Try it now**: [Hugging Face Space Demo](https://huggingface.co/spaces/soupstick/marketplace-intelligence)
+
+### The HF Space runs a simplified Gradio interface for quick testing. For the full FastAPI backend and AWS deployment, use this repository.
+---
+
 
 ## One‑Click Deploy to AWS (ECS Fargate)
 
