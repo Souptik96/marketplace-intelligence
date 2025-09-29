@@ -10,25 +10,16 @@ log = logging.getLogger("bizsql")
 
 DATA_CSV = os.getenv("DATA_CSV", "data/daily_product_sales.csv")
 
-SCHEMA = "Table daily_product_sales(product_title TEXT, category TEXT, day DATE, units INT, revenue DOUBLE)."
+SCHEMA = "Table daily_product_sales(product_title TEXT, category TEXT, day DATE, units INT, revenue DOUBLE). Use DATE functions like date_trunc('quarter', day)."
 
-PROMPT_GEN = """You convert a business question into DuckDB SQL ONLY.
-- Start with SELECT or WITH.
-- Use column names exactly: product_title, category, day, units, revenue
-- Use year 2024 for quarter filters (Q1..Q4).
-- If aggregation is implied, aggregate and sort appropriately.
+PROMPT_GEN = """You are a SQL expert. Convert this business question to DuckDB SQL. Output ONLY the SQL query. Schema: {schema}
 Question: {q}
 SQL:"""
 
-PROMPT_REV = """You are a senior BI reviewer. Given schema, question and SQL:
-1) Check intent & correctness (filters, groupings, windows).
-2) List issues (if any).
-3) Provide corrected SQL if needed.
-Return JSON with keys: reasoning, ok (true/false), fixed_sql.
+PROMPT_REV = """Review this SQL for the question and schema. Output JSON: {{"reasoning": "your analysis", "ok": true/false, "fixed_sql": "corrected SQL or empty"}}.
 Schema: {schema}
 Question: {q}
-SQL:
-{sql}
+SQL: {sql}
 JSON:"""
 
 app = FastAPI(title="BizSQL API", version="0.2")

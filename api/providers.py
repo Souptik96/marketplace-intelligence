@@ -1,59 +1,47 @@
-import os, json, re, requests
+# /api/providers.py
+import os
+import requests
+import json
 
-HF_BASE = "https://api-inference.huggingface.co/models"
-FW_BASE = "https://api.fireworks.ai/inference/v1/chat/completions"
+HF_ENDPOINT = "https://api-inference.huggingface.co/models"
+FW_ENDPOINT = "https://api.fireworks.ai/infer"  # Correct endpoint for completions
 
-def _hf_call(model: str, prompt: str) -> str:
-    headers = {"Authorization": f"Bearer {os.getenv('HF_API_KEY','')}",
-               "x-use-cache": "false"}
-    payload = {"inputs": prompt, "parameters": {"max_new_tokens": 256, "temperature": 0}}
-    r = requests.post(f"{HF_BASE}/{model}", headers=headers, json=payload, timeout=60)
-    r.raise_for_status()
-    j = r.json()
-    # different models return list/dict; normalize
-    if isinstance(j, list) and j and "generated_text" in j[0]:
-        return j[0]["generated_text"]
-    if isinstance(j, dict) and "generated_text" in j:
-        return j["generated_text"]
-    # fallback: try 'data' shape
-    return json.dumps(j)
+def _hf_call(model, prompt):
+    response = requests.post(
+        f"{HF_ENDPOINT}/{model}",
+        headers={
+            "Authorization": f"Bearer {os.getenv('HF_API_KEY', '')}",
+        },
+        json={"inputs": prompt, "parameters": {"max_new_tokens": 512, "temperature": 0.1}}
+    )
+    response.raise_for_status()
+    json_resp = response.json()
+    return json_resp[0]["generated_text"] if isinstance(json_resp, list) else json_resp["generated_text"]
 
 def _fw_call(model, prompt):
-    r = requests.post(
-        "https://api.fireworks.ai/infer",
-        headers={"Authorization": f"Bearer {os.getenv('FIREWORKS_API_KEY', '')}"},
+    response = requests.post(
+        FW_ENDPOINT,
+        headers={
+            "Authorization": f"Bearer {os.getenv('FIREWORKS_API_KEY', '')}",
+            "Content-Type": "application/json"
+        },
         json={
             "model": model,
-            "prompt": prompt,
-            "max_tokens": 200,
-            "temperature": 0
+            "prompt": prompt,  # Use 'prompt' for completion-style (your SQL gen/review fits)
+            "max_generated_tokens": 512,
+            "temperature": 0.1
         }
     )
-    r.raise_for_status()
-    return r.json()["results"][0]["text"]
+    response.raise_for_status()
+    result = response.json()
+    # Parse response: Fireworks returns {"results": [{"text": "..."}]}
+    if "results" in result and len(result["results"]) > 0:
+        return result["results"][0]["text"]
+    raise ValueError(f"Unexpected Fireworks response: {json.dumps(result)}")
 
-def llm_call(kind: str, prompt: str) -> str:
-    prov = os.getenv("LLM_PROVIDER", "hf").lower()
-    model = os.getenv("LLM_MODEL_GEN") if kind == "gen" else os.getenv("LLM_MODEL_REV")
-    if not model:
-        raise RuntimeError(f"Missing model id for kind={kind}. Set LLM_MODEL_GEN/REV.")
-    txt = _hf_call(model, prompt) if prov == "hf" else _fw_call(model, prompt)
-    return txt
-
-def extract_sql(text: str) -> str:
-    m = re.search(r"```sql\s*(.*?)```", text, flags=re.I | re.S)
-    if m: return m.group(1).strip().rstrip(";")
-    m = re.search(r"```(.*?)```", text, flags=re.S)
-    if m: text = m.group(1)
-    m = re.search(r"(?is)\b(select|with)\b.*", text)
-    return m.group(0).strip() if m else text.strip()
-
-def extract_json(text: str):
-    # try fenced
-    m = re.search(r"```json\s*(\{.*?\})\s*```", text, flags=re.S)
-    blob = m.group(1) if m else text
-    # locate first {...}
-    m = re.search(r"\{.*\}", blob, flags=re.S)
-    blob = m.group(0) if m else blob
-    try: return json.loads(blob)
-    except: return {"raw": text}
+def llm_call(kind, prompt):
+    provider = os.getenv("LLM_PROVIDER", "hf")
+    model = os.getenv("LLM_MODEL_GEN" if kind == "gen" else "LLM_MODEL_REV")
+    if provider == "hf":
+        return _hf_call(model, prompt)
+    return _fw_call(model, prompt)
