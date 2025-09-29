@@ -18,14 +18,19 @@ def _hf_call(model: str, prompt: str) -> str:
     # fallback: try 'data' shape
     return json.dumps(j)
 
-def _fw_call(model: str, prompt: str) -> str:
-    headers = {"Authorization": f"Bearer {os.getenv('FIREWORKS_API_KEY','')}"}
-    payload = {"model": model, "messages": [{"role": "user", "content": prompt}],
-               "temperature": 0, "max_tokens": 256}
-    r = requests.post(FW_BASE, headers=headers, json=payload, timeout=60)
+def _fw_call(model, prompt):
+    r = requests.post(
+        "https://api.fireworks.ai/infer",
+        headers={"Authorization": f"Bearer {os.getenv('FIREWORKS_API_KEY', '')}"},
+        json={
+            "model": model,
+            "prompt": prompt,
+            "max_tokens": 200,
+            "temperature": 0
+        }
+    )
     r.raise_for_status()
-    j = r.json()
-    return j["choices"][0]["message"]["content"]
+    return r.json()["results"][0]["text"]
 
 def llm_call(kind: str, prompt: str) -> str:
     prov = os.getenv("LLM_PROVIDER", "hf").lower()
