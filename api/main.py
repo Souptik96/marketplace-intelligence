@@ -1,3 +1,4 @@
+# /api/main.py
 from fastapi import FastAPI, Query
 from pydantic import BaseModel
 from typing import List, Dict
@@ -5,6 +6,7 @@ import os
 import duckdb
 import pandas as pd
 import json
+import re
 from .providers import llm_call
 
 app = FastAPI(title="DataWeaver API")
