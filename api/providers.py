@@ -6,6 +6,26 @@ import json
 HF_ENDPOINT = "https://api-inference.huggingface.co/models"
 FW_ENDPOINT = "https://api.fireworks.ai/infer"  # Correct endpoint for completions
 
+def extract_sql(text: str) -> str:
+    """Pull SQL out of LLM text: prefer ```sql fences```, else first SELECT/WITH."""
+    m = re.search(r"```sql\s*(.*?)```", text, flags=re.I | re.S)
+    if m: return m.group(1).strip().rstrip(";")
+    m = re.search(r"```(.*?)```", text, flags=re.S)
+    if m: text = m.group(1)
+    m = re.search(r"(?is)\b(select|with)\b.*", text)
+    return m.group(0).strip() if m else text.strip()
+
+def extract_json(text: str):
+    """Best-effort JSON extraction from LLM output."""
+    m = re.search(r"```json\s*(\{.*?\})\s*```", text, flags=re.S)
+    blob = m.group(1) if m else text
+    m = re.search(r"\{.*\}", blob, flags=re.S)
+    blob = m.group(0) if m else blob
+    try:
+        return json.loads(blob)
+    except Exception:
+        return {"raw": text}
+
 def _hf_call(model, prompt):
     response = requests.post(
         f"{HF_ENDPOINT}/{model}",

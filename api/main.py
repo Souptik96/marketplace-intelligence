@@ -6,7 +6,6 @@ import pandas as pd
 from fastapi import FastAPI, Query
 from pydantic import BaseModel
 
-# pull helpers from providers (no docstrings here)
 from .providers import llm_call, extract_sql, extract_json
 from .sql_safety import sanitize
 
