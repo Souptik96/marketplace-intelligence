@@ -1,19 +1,40 @@
 import os, json, re, requests
 
 # Providers
-HF_BASE  = "https://api-inference.huggingface.co/models"
-FW_CHAT  = "https://api.fireworks.ai/inference/v1/chat/completions"
-FW_COMP  = "https://api.fireworks.ai/inference/v1/completions"
+HF_BASE  = "https://api-inference.huggingface.co/models"  # Fixed trailing spaces
+FW_CHAT  = "https://api.fireworks.ai/inference/v1/chat/completions"  # Fixed trailing spaces
+FW_COMP  = "https://api.fireworks.ai/inference/v1/completions"  # Fixed trailing spaces
 
 # ---------- Helper extractors (now live here so main.py can import them) ----------
+
 def extract_sql(text: str) -> str:
     """Prefer ```sql ...``` fenced blocks, else first SELECT/WITH clause."""
+    # 1. Try to extract from ```sql ... ``` blocks
     m = re.search(r"```sql\s*(.*?)```", text, flags=re.I | re.S)
-    if m: return m.group(1).strip().rstrip(";")
+    if m: 
+        return m.group(1).strip().rstrip(";")
+    
+    # 2. If no specific sql block, try generic code blocks (might contain SQL)
     m = re.search(r"```(.*?)```", text, flags=re.S)
-    if m: text = m.group(1)
-    m = re.search(r"(?is)\b(select|with)\b.*", text)
-    return m.group(0).strip() if m else text.strip()
+    if m: 
+        potential_sql = m.group(1).strip()
+        # Check if the content inside generic block looks like SQL
+        if re.search(r"(?is)\b(select|from|with|insert|update|delete)\b", potential_sql):
+            return potential_sql.rstrip(";")
+    
+    # 3. Fallback: Extract first SQL statement from plain text
+    m = re.search(r"(?is)\b(select|with)\b.*?(?:;|$)", text)
+    if m:
+        sql = m.group(0).strip()
+        # Ensure it ends with a complete clause, not mid-sentence
+        # This finds the last major SQL clause keyword and cuts off after it if incomplete
+        # For now, just return the matched SQL statement
+        return sql.rstrip(";")
+    
+    # 4. If no SQL pattern found, return empty string or raise an error
+    # Previously, it returned the entire text which could be non-SQL
+    return ""  # Or raise ValueError("No SQL statement found in response")
+
 
 def extract_json(text: str):
     """Best-effort JSON extraction from an LLM response."""
@@ -27,6 +48,7 @@ def extract_json(text: str):
         return {"raw": text}
 
 # ---------- Provider calls ----------
+
 def _hf_call(model: str, prompt: str) -> str:
     key = os.getenv("HF_API_KEY", "")
     if not key:
