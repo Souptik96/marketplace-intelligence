@@ -1,4 +1,8 @@
-import os, time, json, logging
+# api/main.py
+import os
+import time
+import json
+import logging
 from typing import List, Dict
 
 import duckdb
@@ -14,17 +18,23 @@ log = logging.getLogger("bizsql")
 
 DATA_CSV = os.getenv("DATA_CSV", "data/daily_product_sales.csv")
 
+# Updated SCHEMA to include date handling instructions
 SCHEMA = (
     "Table daily_product_sales("
-    "product_title TEXT, category TEXT, day DATE, units INT, revenue DOUBLE)."
+    "product_title TEXT, category TEXT, day DATE, units INT, revenue DOUBLE). "
+    "Use DATE functions like date_trunc('quarter', day). "
+    "For date literals, use CAST('YYYY-MM-DD' AS DATE). "
+    "Assume current year (2024) for quarters like Q3 (July-Sep), e.g., CAST('2024-07-01' AS DATE) for Q3 start."
 )
 
-# Use single-quoted triple strings for robustness
-PROMPT_GEN = '''You convert a business question into DuckDB SQL ONLY.
-- Start with SELECT or WITH.
+# Updated PROMPT_GEN with explicit date handling instructions
+PROMPT_GEN = '''You are a SQL expert. Convert this business question to DuckDB SQL. Output ONLY the SQL query.
 - Use column names exactly: product_title, category, day, units, revenue
-- Use year 2024 for quarter filters (Q1..Q4).
+- Use DATE functions like date_trunc('quarter', day).
+- For date literals, use CAST('YYYY-MM-DD' AS DATE).
+- Assume current year (2024) for quarters like Q3 (July-Sep), e.g., CAST('2024-07-01' AS DATE) for Q3 start.
 - If aggregation is implied, aggregate and sort appropriately.
+Schema: {schema}
 Question: {q}
 SQL:'''
 
@@ -40,6 +50,14 @@ SQL:
 JSON:'''
 
 app = FastAPI(title="BizSQL API", version="0.2")
+
+# Pydantic models for request/response bodies
+class GenRequest(BaseModel):
+    q: str
+
+class ReviewRequest(BaseModel):
+    q: str
+    sql: str
 
 class ExecResponse(BaseModel):
     sql: str
@@ -62,17 +80,17 @@ def schema():
     return {"schema": SCHEMA}
 
 @app.post("/nl2sql")
-def nl2sql(q: str):
+def nl2sql(req: GenRequest): # Accept request body as GenRequest object
     t0 = time.time()
-    raw = llm_call("gen", PROMPT_GEN.format(q=q))
+    raw = llm_call("gen", PROMPT_GEN.format(q=req.q, schema=SCHEMA)) # Use req.q and pass schema
     sql = sanitize(extract_sql(raw))
     log.info(json.dumps({"metric": "gen_latency_ms", "v": int((time.time() - t0) * 1000)}))
     return {"sql": sql, "raw": raw}
 
 @app.post("/review")
-def review(q: str, sql: str):
+def review(req: ReviewRequest): # Accept request body as ReviewRequest object
     t0 = time.time()
-    out = llm_call("rev", PROMPT_REV.format(schema=SCHEMA, q=q, sql=sql))
+    out = llm_call("rev", PROMPT_REV.format(schema=SCHEMA, q=req.q, sql=req.sql)) # Use req.q and req.sql
     js = extract_json(out)
     log.info(json.dumps({"metric": "review_latency_ms", "v": int((time.time() - t0) * 1000)}))
     return js
@@ -81,12 +99,19 @@ def review(q: str, sql: str):
 def execute(q: str = Query(...)):
     # 1) generate SQL
     t0 = time.time()
-    sql = sanitize(extract_sql(llm_call("gen", PROMPT_GEN.format(q=q))))
+    raw_response = llm_call("gen", PROMPT_GEN.format(q=q, schema=SCHEMA)) # Pass schema to prompt
+    sql = sanitize(extract_sql(raw_response))
     gen_ms = int((time.time() - t0) * 1000)
+    print(f"Generated SQL: {sql}") # Debug log
 
     # 2) execute
     t1 = time.time()
-    rows = _con().execute(sql).df().to_dict(orient="records")
+    try:
+        rows = _con().execute(sql).df().to_dict(orient="records")
+    except Exception as e:
+        log.error(f"SQL Execution Error: {e}")
+        log.error(f"Problematic SQL: {sql}")
+        raise # Re-raise the exception to return a 500 error
     exec_ms = int((time.time() - t1) * 1000)
 
     # 3) review
@@ -98,3 +123,10 @@ def execute(q: str = Query(...)):
     log.info(json.dumps({"metric": "exec_latency_ms", "v": exec_ms}))
     log.info(json.dumps({"metric": "review_latency_ms", "v": rev_ms}))
     return {"sql": sql, "rows": rows, "review": rev}
+
+# --- Sanitize function moved here if it was in main.py previously ---
+# If it's in a separate file (sql_safety.py), remove this block and ensure the import is correct.
+# def sanitize(sql: str) -> str:
+#     # Your sanitize logic here (from previous examples or sql_safety.py)
+#     # ... (existing sanitize function code) ...
+#     pass
