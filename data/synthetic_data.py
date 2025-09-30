@@ -1,11 +1,7 @@
-import os, time, json, logging
-from typing import List, Dict
-
-import duckdb
-import pandas as pd
 from fastapi import FastAPI, Query
 from pydantic import BaseModel
-
+from typing import List, Dict
+import os, time, json, duckdb, pandas as pd, logging
 from .providers import llm_call, extract_sql, extract_json
 from .sql_safety import sanitize
 
@@ -14,21 +10,17 @@ log = logging.getLogger("bizsql")
 
 DATA_CSV = os.getenv("DATA_CSV", "data/daily_product_sales.csv")
 
-SCHEMA = (
-    "Table daily_product_sales("
-    "product_title TEXT, category TEXT, day DATE, units INT, revenue DOUBLE)."
-)
+SCHEMA = "Table daily_product_sales(product_title TEXT, category TEXT, day DATE, units INT, revenue DOUBLE)."
 
-# Use single-quoted triple strings for robustness
-PROMPT_GEN = '''You convert a business question into DuckDB SQL ONLY.
+PROMPT_GEN = """You convert a business question into DuckDB SQL ONLY.
 - Start with SELECT or WITH.
 - Use column names exactly: product_title, category, day, units, revenue
 - Use year 2024 for quarter filters (Q1..Q4).
 - If aggregation is implied, aggregate and sort appropriately.
 Question: {q}
-SQL:'''
+SQL:"""
 
-PROMPT_REV = '''You are a senior BI reviewer. Given schema, question and SQL:
+PROMPT_REV = """You are a senior BI reviewer. Given schema, question and SQL:
 1) Check intent & correctness (filters, groupings, windows).
 2) List issues (if any).
 3) Provide corrected SQL if needed.
@@ -37,7 +29,7 @@ Schema: {schema}
 Question: {q}
 SQL:
 {sql}
-JSON:'''
+JSON:"""
 
 app = FastAPI(title="BizSQL API", version="0.2")
 
@@ -54,19 +46,17 @@ def _con():
     return con
 
 @app.get("/health")
-def health():
-    return {"ok": True, "provider": os.getenv("LLM_PROVIDER", "hf")}
+def health(): return {"ok": True, "provider": os.getenv("LLM_PROVIDER","hf")}
 
 @app.get("/schema")
-def schema():
-    return {"schema": SCHEMA}
+def schema(): return {"schema": SCHEMA}
 
 @app.post("/nl2sql")
 def nl2sql(q: str):
     t0 = time.time()
     raw = llm_call("gen", PROMPT_GEN.format(q=q))
     sql = sanitize(extract_sql(raw))
-    log.info(json.dumps({"metric": "gen_latency_ms", "v": int((time.time() - t0) * 1000)}))
+    log.info(json.dumps({"metric":"gen_latency_ms","v":int((time.time()-t0)*1000)}))
     return {"sql": sql, "raw": raw}
 
 @app.post("/review")
@@ -74,27 +64,27 @@ def review(q: str, sql: str):
     t0 = time.time()
     out = llm_call("rev", PROMPT_REV.format(schema=SCHEMA, q=q, sql=sql))
     js = extract_json(out)
-    log.info(json.dumps({"metric": "review_latency_ms", "v": int((time.time() - t0) * 1000)}))
+    log.info(json.dumps({"metric":"review_latency_ms","v":int((time.time()-t0)*1000)}))
     return js
 
 @app.get("/execute", response_model=ExecResponse)
 def execute(q: str = Query(...)):
-    # 1) generate SQL
+    # 1) gen SQL
     t0 = time.time()
     sql = sanitize(extract_sql(llm_call("gen", PROMPT_GEN.format(q=q))))
-    gen_ms = int((time.time() - t0) * 1000)
+    gen_ms = int((time.time()-t0)*1000)
 
-    # 2) execute
+    # 2) run
     t1 = time.time()
     rows = _con().execute(sql).df().to_dict(orient="records")
-    exec_ms = int((time.time() - t1) * 1000)
+    exec_ms = int((time.time()-t1)*1000)
 
     # 3) review
     t2 = time.time()
     rev = extract_json(llm_call("rev", PROMPT_REV.format(schema=SCHEMA, q=q, sql=sql)))
-    rev_ms = int((time.time() - t2) * 1000)
+    rev_ms = int((time.time()-t2)*1000)
 
-    log.info(json.dumps({"metric": "gen_latency_ms", "v": gen_ms}))
-    log.info(json.dumps({"metric": "exec_latency_ms", "v": exec_ms}))
-    log.info(json.dumps({"metric": "review_latency_ms", "v": rev_ms}))
+    log.info(json.dumps({"metric":"gen_latency_ms","v":gen_ms}))
+    log.info(json.dumps({"metric":"exec_latency_ms","v":exec_ms}))
+    log.info(json.dumps({"metric":"review_latency_ms","v":rev_ms}))
     return {"sql": sql, "rows": rows, "review": rev}
