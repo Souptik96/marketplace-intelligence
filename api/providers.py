@@ -1,64 +1,59 @@
-import os, json, re, requests
+import os, json, requests
 
 HF_BASE = "https://api-inference.huggingface.co/models"
-FW_BASE = "https://api.fireworks.ai/inference/v1/chat/completions"
+FW_CHAT = "https://api.fireworks.ai/inference/v1/chat/completions"
+FW_COMP = "https://api.fireworks.ai/inference/v1/completions"
 
 def _hf_call(model: str, prompt: str) -> str:
     key = os.getenv("HF_API_KEY", "")
-    headers = {"Authorization": f"Bearer {key}"} if key else {}
-    payload = {"inputs": prompt, "parameters": {"max_new_tokens": 256, "temperature": 0}}
-    r = requests.post(f"{HF_BASE}/{model}", headers=headers, json=payload, timeout=60)
+    if not key:
+        raise RuntimeError("HF_API_KEY not set")
+    r = requests.post(
+        f"{HF_BASE}/{model}",
+        headers={"Authorization": f"Bearer {key}", "x-use-cache": "false"},
+        json={"inputs": prompt, "parameters": {"max_new_tokens": 256, "temperature": 0}},
+        timeout=60,
+    )
     r.raise_for_status()
     j = r.json()
-    if isinstance(j, list) and j and "generated_text" in j[0]:
-        return j[0]["generated_text"]
-    if isinstance(j, dict) and "generated_text" in j:
-        return j["generated_text"]
+    if isinstance(j, list) and j and "generated_text" in j[0]: return j[0]["generated_text"]
+    if isinstance(j, dict) and "generated_text" in j: return j["generated_text"]
     return json.dumps(j)
 
 def _fw_call(model: str, prompt: str) -> str:
     key = os.getenv("FIREWORKS_API_KEY", "")
     if not key:
-        raise RuntimeError("FIREWORKS_API_KEY not set.")
-    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-    payload = {
-        "model": model,  # e.g. accounts/fireworks/models/llama-v3p1-8b-instruct  (use your exact model id)
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0, "max_tokens": 256
-    }
-    r = requests.post(FW_BASE, headers=headers, json=payload, timeout=60)
-    if r.status_code in (401, 403):
-        raise RuntimeError(f"Fireworks auth/model error ({r.status_code}): {r.text[:200]}")
+        raise RuntimeError("FIREWORKS_API_KEY not set")
+    h = {"Authorization": f"Bearer {key}"}
+    # primary: chat/completions
+    payload = {"model": model, "messages": [{"role": "user", "content": prompt}],
+               "temperature": 0, "max_tokens": 256}
+    r = requests.post(FW_CHAT, headers=h, json=payload, timeout=60)
+    if r.status_code == 404:
+        # fallback: plain completions
+        payload = {"model": model, "prompt": prompt, "temperature": 0, "max_tokens": 256}
+        r = requests.post(FW_COMP, headers=h, json=payload, timeout=60)
+    if r.status_code == 403:
+        raise RuntimeError("Fireworks 403 Forbidden: invalid API key or no access to model. "
+                           "Verify FIREWORKS_API_KEY and model id.")
     r.raise_for_status()
     j = r.json()
-    return j["choices"][0]["message"]["content"]
+    # normalize
+    if "choices" in j and j["choices"]:
+        c = j["choices"][0]
+        if "message" in c and "content" in c["message"]: return c["message"]["content"]
+        if "text" in c: return c["text"]
+    return json.dumps(j)
 
 def llm_call(kind: str, prompt: str) -> str:
     prov = os.getenv("LLM_PROVIDER", "hf").lower()
     model = os.getenv("LLM_MODEL_GEN") if kind == "gen" else os.getenv("LLM_MODEL_REV")
     if not model:
-        # sane defaults (HF) if not provided
-        model = "Qwen/Qwen2.5-1.5B-Instruct" if kind == "gen" else "Qwen/Qwen2.5-Coder-1.5B-Instruct"
+        raise RuntimeError(f"Missing model id for kind={kind}. Set LLM_MODEL_GEN/REV.")
     try:
-        return _fw_call(model, prompt) if prov == "fireworks" else _hf_call(model, prompt)
+        return _hf_call(model, prompt) if prov == "hf" else _fw_call(model, prompt)
     except Exception as e:
-        # graceful fallback to HF if FW fails and HF key is present
-        if prov == "fireworks" and os.getenv("HF_API_KEY"):
+        # graceful fallback to HF if Fireworks fails and HF key is present
+        if prov != "hf" and os.getenv("HF_API_KEY"):
             return _hf_call(model, prompt)
         raise
-
-def extract_sql(text: str) -> str:
-    m = re.search(r"```sql\s*(.*?)```", text, flags=re.I | re.S)
-    if m: return m.group(1).strip().rstrip(";")
-    m = re.search(r"```(.*?)```", text, flags=re.S)
-    if m: text = m.group(1)
-    m = re.search(r"(?is)\b(select|with)\b.*", text)
-    return m.group(0).strip() if m else text.strip()
-
-def extract_json(text: str):
-    m = re.search(r"```json\s*(\{.*?\})\s*```", text, flags=re.S)
-    blob = m.group(1) if m else text
-    m = re.search(r"\{.*\}", blob, flags=re.S)
-    blob = m.group(0) if m else blob
-    try: return json.loads(blob)
-    except: return {"raw": text}
