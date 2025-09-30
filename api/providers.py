@@ -1,9 +1,32 @@
-import os, json, requests
+import os, json, re, requests
 
-HF_BASE = "https://api-inference.huggingface.co/models"
-FW_CHAT = "https://api.fireworks.ai/inference/v1/chat/completions"
-FW_COMP = "https://api.fireworks.ai/inference/v1/completions"
+# Providers
+HF_BASE  = "https://api-inference.huggingface.co/models"
+FW_CHAT  = "https://api.fireworks.ai/inference/v1/chat/completions"
+FW_COMP  = "https://api.fireworks.ai/inference/v1/completions"
 
+# ---------- Helper extractors (now live here so main.py can import them) ----------
+def extract_sql(text: str) -> str:
+    """Prefer ```sql ...``` fenced blocks, else first SELECT/WITH clause."""
+    m = re.search(r"```sql\s*(.*?)```", text, flags=re.I | re.S)
+    if m: return m.group(1).strip().rstrip(";")
+    m = re.search(r"```(.*?)```", text, flags=re.S)
+    if m: text = m.group(1)
+    m = re.search(r"(?is)\b(select|with)\b.*", text)
+    return m.group(0).strip() if m else text.strip()
+
+def extract_json(text: str):
+    """Best-effort JSON extraction from an LLM response."""
+    m = re.search(r"```json\s*(\{.*?\})\s*```", text, flags=re.S)
+    blob = m.group(1) if m else text
+    m = re.search(r"\{.*\}", blob, flags=re.S)
+    blob = m.group(0) if m else blob
+    try:
+        return json.loads(blob)
+    except Exception:
+        return {"raw": text}
+
+# ---------- Provider calls ----------
 def _hf_call(model: str, prompt: str) -> str:
     key = os.getenv("HF_API_KEY", "")
     if not key:
@@ -16,8 +39,10 @@ def _hf_call(model: str, prompt: str) -> str:
     )
     r.raise_for_status()
     j = r.json()
-    if isinstance(j, list) and j and "generated_text" in j[0]: return j[0]["generated_text"]
-    if isinstance(j, dict) and "generated_text" in j: return j["generated_text"]
+    if isinstance(j, list) and j and "generated_text" in j[0]:
+        return j[0]["generated_text"]
+    if isinstance(j, dict) and "generated_text" in j:
+        return j["generated_text"]
     return json.dumps(j)
 
 def _fw_call(model: str, prompt: str) -> str:
@@ -25,35 +50,40 @@ def _fw_call(model: str, prompt: str) -> str:
     if not key:
         raise RuntimeError("FIREWORKS_API_KEY not set")
     h = {"Authorization": f"Bearer {key}"}
-    # primary: chat/completions
+
+    # Primary: chat/completions
     payload = {"model": model, "messages": [{"role": "user", "content": prompt}],
                "temperature": 0, "max_tokens": 256}
     r = requests.post(FW_CHAT, headers=h, json=payload, timeout=60)
+
+    # Fallback: plain completions
     if r.status_code == 404:
-        # fallback: plain completions
         payload = {"model": model, "prompt": prompt, "temperature": 0, "max_tokens": 256}
         r = requests.post(FW_COMP, headers=h, json=payload, timeout=60)
+
     if r.status_code == 403:
-        raise RuntimeError("Fireworks 403 Forbidden: invalid API key or no access to model. "
-                           "Verify FIREWORKS_API_KEY and model id.")
+        raise RuntimeError("Fireworks 403 Forbidden: invalid API key or no access to the model id.")
+
     r.raise_for_status()
     j = r.json()
-    # normalize
     if "choices" in j and j["choices"]:
         c = j["choices"][0]
-        if "message" in c and "content" in c["message"]: return c["message"]["content"]
-        if "text" in c: return c["text"]
+        if "message" in c and "content" in c["message"]:
+            return c["message"]["content"]
+        if "text" in c:
+            return c["text"]
     return json.dumps(j)
 
 def llm_call(kind: str, prompt: str) -> str:
-    prov = os.getenv("LLM_PROVIDER", "hf").lower()
+    """kind: 'gen' or 'rev' — picks model via env vars."""
+    prov  = os.getenv("LLM_PROVIDER", "hf").lower()
     model = os.getenv("LLM_MODEL_GEN") if kind == "gen" else os.getenv("LLM_MODEL_REV")
     if not model:
         raise RuntimeError(f"Missing model id for kind={kind}. Set LLM_MODEL_GEN/REV.")
     try:
         return _hf_call(model, prompt) if prov == "hf" else _fw_call(model, prompt)
     except Exception as e:
-        # graceful fallback to HF if Fireworks fails and HF key is present
+        # If Fireworks fails and HF is available, auto-fallback
         if prov != "hf" and os.getenv("HF_API_KEY"):
             return _hf_call(model, prompt)
         raise
