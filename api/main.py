@@ -7,7 +7,7 @@ from typing import List, Dict
 
 import duckdb
 import pandas as pd
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, HTTPException
 from pydantic import BaseModel
 
 from .providers import llm_call, extract_sql, extract_json
@@ -51,18 +51,22 @@ JSON:'''
 
 app = FastAPI(title="BizSQL API", version="0.2")
 
+
 # Pydantic models for request/response bodies
 class GenRequest(BaseModel):
     q: str
+
 
 class ReviewRequest(BaseModel):
     q: str
     sql: str
 
+
 class ExecResponse(BaseModel):
     sql: str
     rows: List[Dict]
     review: Dict
+
 
 def _con():
     df = pd.read_csv(DATA_CSV, parse_dates=["day"])
@@ -71,58 +75,77 @@ def _con():
     con.register("daily_product_sales", df)
     return con
 
+
+def _is_sql(text: str) -> bool:
+    stripped = text.strip().lower()
+    return stripped.startswith("select") or stripped.startswith("with")
+
+
 @app.get("/health")
 def health():
     return {"ok": True, "provider": os.getenv("LLM_PROVIDER", "hf")}
+
 
 @app.get("/schema")
 def schema():
     return {"schema": SCHEMA}
 
+
 @app.post("/nl2sql")
-def nl2sql(req: GenRequest): # Accept request body as GenRequest object
+def nl2sql(req: GenRequest):  # Accept request body as GenRequest object
     t0 = time.time()
-    raw = llm_call("gen", PROMPT_GEN.format(q=req.q, schema=SCHEMA)) # Use req.q and pass schema
+    raw = llm_call("gen", PROMPT_GEN.format(q=req.q, schema=SCHEMA))  # Use req.q and pass schema
     sql = sanitize(extract_sql(raw))
     log.info(json.dumps({"metric": "gen_latency_ms", "v": int((time.time() - t0) * 1000)}))
     return {"sql": sql, "raw": raw}
 
+
 @app.post("/review")
-def review(req: ReviewRequest): # Accept request body as ReviewRequest object
+def review(req: ReviewRequest):  # Accept request body as ReviewRequest object
     t0 = time.time()
-    out = llm_call("rev", PROMPT_REV.format(schema=SCHEMA, q=req.q, sql=req.sql)) # Use req.q and req.sql
+    out = llm_call("rev", PROMPT_REV.format(schema=SCHEMA, q=req.q, sql=req.sql))  # Use req.q and req.sql
     js = extract_json(out)
     log.info(json.dumps({"metric": "review_latency_ms", "v": int((time.time() - t0) * 1000)}))
     return js
 
-@app.get("/execute", response_model=ExecResponse)
-def execute(q: str = Query(...)):
-    # 1) generate SQL
-    t0 = time.time()
-    raw_response = llm_call("gen", PROMPT_GEN.format(q=q, schema=SCHEMA)) # Pass schema to prompt
-    sql = sanitize(extract_sql(raw_response))
-    gen_ms = int((time.time() - t0) * 1000)
-    print(f"Generated SQL: {sql}") # Debug log
 
-    # 2) execute
+@app.get("/execute", response_model=ExecResponse)
+def execute(q: str = Query(..., description="Business question or SQL to execute")):
+    if not q.strip():
+        raise HTTPException(status_code=422, detail="Query text is required.")
+
+    gen_ms = 0
+    if _is_sql(q):
+        sql = sanitize(q)
+        log.info(json.dumps({"metric": "gen_latency_ms", "v": gen_ms}))
+    else:
+        t0 = time.time()
+        raw_response = llm_call("gen", PROMPT_GEN.format(q=q, schema=SCHEMA))  # Pass schema to prompt
+        sql = sanitize(extract_sql(raw_response))
+        gen_ms = int((time.time() - t0) * 1000)
+        log.info(json.dumps({"metric": "gen_latency_ms", "v": gen_ms}))
+        print(f"Generated SQL: {sql}")  # Debug log
+
     t1 = time.time()
     try:
         rows = _con().execute(sql).df().to_dict(orient="records")
-    except Exception as e:
-        log.error(f"SQL Execution Error: {e}")
+    except Exception as exc:
+        log.error(f"SQL Execution Error: {exc}")
         log.error(f"Problematic SQL: {sql}")
-        raise # Re-raise the exception to return a 500 error
+        raise HTTPException(status_code=400, detail=f"SQL Execution Error: {exc}") from exc
     exec_ms = int((time.time() - t1) * 1000)
-
-    # 3) review
-    t2 = time.time()
-    rev = extract_json(llm_call("rev", PROMPT_REV.format(schema=SCHEMA, q=q, sql=sql)))
-    rev_ms = int((time.time() - t2) * 1000)
-
-    log.info(json.dumps({"metric": "gen_latency_ms", "v": gen_ms}))
     log.info(json.dumps({"metric": "exec_latency_ms", "v": exec_ms}))
+
+    t2 = time.time()
+    review_question = q if not _is_sql(q) else "Direct SQL execution"
+    rev = extract_json(
+        llm_call("rev", PROMPT_REV.format(schema=SCHEMA, q=review_question, sql=sql))
+    )
+    rev_ms = int((time.time() - t2) * 1000)
     log.info(json.dumps({"metric": "review_latency_ms", "v": rev_ms}))
+
     return {"sql": sql, "rows": rows, "review": rev}
+
 
 # --- Sanitize function moved here if it was in main.py previously ---
 # If it's in a separate file (sql_safety.py), remove this block and ensure the import is correct.
