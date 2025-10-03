@@ -74,9 +74,10 @@ DataWeaver is a streamlined system that converts business logic (natural languag
 
 ### Hugging Face Spaces (UI)
 
-1. Create a Space at Hugging Face.
-2. Upload `app/app.py`, `requirements.txt`, and `data/daily_product_sales.csv`.
-3. Set `API_URL` secret to your AWS ALB DNS (post-deployment).
+1. Sync the latest Streamlit UI (`app/app.py`) and `requirements.txt` to the Space.
+2. Push the v1.1.0 release assets or pull directly from this branch.
+3. Set the `API_URL` secret to your FastAPI endpoint (e.g., AWS ALB DNS).
+4. Live Space: https://huggingface.co/spaces/soupstick/marketplace-intelligence
 
 ### AWS Fargate (API)
 
@@ -92,7 +93,7 @@ DataWeaver is a streamlined system that converts business logic (natural languag
 
 - **Ask Tab:** Input a business question (e.g., "Revenue by category last month") to generate SQL, see results, and view a chart.
 - **Review Tab:** Paste SQL or a question to get validation and suggestions.
-- **Dashboard Tab:** View auto-generated visuals or placeholders for missing data.
+- **Dashboard Tab:** Explore dynamic charts fed by live `/execute` results with category and date filters.
 
 ## Metrics
 
@@ -101,9 +102,14 @@ DataWeaver is a streamlined system that converts business logic (natural languag
 - Review Time: ~10-30 seconds (85% reduction from 3-5 min).
 - Dashboard Time: <10 minutes (90% reduction from 1-2 hrs).
 
-- **Accuracy:** ≥85% top-1 accuracy on synthetic test set (run `python tests/test_nl2sql.py`).
+- **Accuracy:** 85% top-1 accuracy on synthetic test set (run `python tests/test_nl2sql.py`).
 - **Latency:** Gen (2s), Review (3s), Execute (~1s) per query.
 - **Cost:** ~$40-60/mo (ECS + ALB) + <$10/mo (inference).
+
+## Changelog
+
+- **v1.1.0 - Dashboard Enhancements:** Dynamic charts with interactive filters, improved error messaging, and faster refresh from optimized Streamlit rendering.
+
 
 ## Directory Structure
 
